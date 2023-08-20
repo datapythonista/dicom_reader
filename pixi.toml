@@ -1,0 +1,12 @@
+[project]
+name = "dicom_reader"
+version = "0.1.0"
+description = "Reader to load data from DICOM files into Apache Arrow"
+authors = ["Marc Garcia <garcia.marc@gmail.com>"]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tasks]
+main = "LD_LIBRARY_PATH=target/debug python dicom_reader/__init__.py"
+
+[dependencies]
