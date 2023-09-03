@@ -7,9 +7,7 @@ channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64"]  # --> add in "osx-arm64" for MacOS
 
 [tasks]
-main = "DYLD_LIBRARY_PATH=target/debug python dicom_reader/__init__.py"   
-
-##For MacOS change from LD_LIBRARY_PATH --> DYLD_LIBRARY_PATH 
+main = "LD_LIBRARY_PATH=target/debug DYLD_LIBRARY_PATH=target/debug python dicom_reader/__init__.py"   
 
 [dependencies]
-python = "3.11.4.*"
+python = "3.11.*"
