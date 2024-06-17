@@ -8,7 +8,7 @@ pub fn create_record_batch(dicom_reader: reader::DicomReader) -> RecordBatch {
     let mut columns_builder = UInt16Builder::new();
     let mut rows_builder = UInt16Builder::new();
     let mut frames_builder = UInt16Builder::new();
-    // let mut voxels_builder = LargeBinaryBuilder::new();
+    let mut voxels_builder = LargeBinaryBuilder::new();
 
     for dicom_image in dicom_reader.take(10) {
         path_builder.append_value(dicom_image.path);
@@ -16,7 +16,11 @@ pub fn create_record_batch(dicom_reader: reader::DicomReader) -> RecordBatch {
         columns_builder.append_value(dicom_image.columns.try_into().unwrap());
         rows_builder.append_value(dicom_image.rows.try_into().unwrap());
         frames_builder.append_value(dicom_image.frames.try_into().unwrap());
-        // voxels_builder.append_value(dicom_image.voxels.as_bytes());  // `.as_bytes()` is nightly
+        let voxels_bytes: &[u8] = unsafe { std::slice::from_raw_parts(
+            dicom_image.voxels.as_ptr() as *const u8,
+            dicom_image.voxels.len() * 2,
+        ) };
+        voxels_builder.append_value(voxels_bytes);
     }
     let schema = Schema::new(vec![
         Field::new("path", DataType::Utf8, false),
@@ -24,7 +28,7 @@ pub fn create_record_batch(dicom_reader: reader::DicomReader) -> RecordBatch {
         Field::new("columns", DataType::UInt16, false),
         Field::new("rows", DataType::UInt16, false),
         Field::new("frames", DataType::UInt16, false),
-        // Field::new("voxels", DataType::Binary, false),
+        Field::new("voxels", DataType::LargeBinary, false),
     ]);
     let record_batch = RecordBatch::try_new(
         std::sync::Arc::new(schema),
@@ -34,7 +38,7 @@ pub fn create_record_batch(dicom_reader: reader::DicomReader) -> RecordBatch {
             std::sync::Arc::new(columns_builder.finish()),
             std::sync::Arc::new(rows_builder.finish()),
             std::sync::Arc::new(frames_builder.finish()),
-            // std::sync::Arc::new(voxels_builder.finish()),
+            std::sync::Arc::new(voxels_builder.finish()),
         ],
     ).unwrap();
 
