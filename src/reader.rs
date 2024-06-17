@@ -7,6 +7,8 @@ use dicom::dictionary_std::tags;
 /// This is not standard in the dimensions, but in the bits used to represent the data.
 /// All the voxels are represented in 16 bits HU.
 pub struct DicomImage {
+    pub path: String,
+    pub modality: String,
     pub columns: usize,
     pub rows: usize,
     pub frames: usize,
@@ -19,6 +21,7 @@ impl DicomImage {
             .with_voi_lut(dicom::pixeldata::VoiLutOption::Default)
             .with_bit_depth(dicom::pixeldata::BitDepthOption::Auto);
 
+        let path = files[0].parent().unwrap().to_str().unwrap();
         let first_dicom_file = dicom::object::open_file(files[0]).unwrap();
         let pixel_data = first_dicom_file.decode_pixel_data().unwrap();
         let columns = pixel_data.columns() as usize;
@@ -27,9 +30,6 @@ impl DicomImage {
 
         let modality = first_dicom_file.element(tags::MODALITY).unwrap().to_str().unwrap();
 
-        if modality != "CT" && modality != "PT" {
-            panic!("Only CT scans are supported. Found modality={modality}");
-        }
         if pixel_data.bits_allocated() != 16 {
             panic!("Only 16 bits pixels are supported. Found bits_allocated={}", pixel_data.bits_allocated());
         }
@@ -37,7 +37,14 @@ impl DicomImage {
             panic!("Only monochrome files are supported. Found samples_per_pixel={}", pixel_data.samples_per_pixel());
         }
 
-        let mut ct_scan = DicomImage { columns, rows, frames, voxels: Vec::with_capacity(columns * rows * frames) };
+        let mut ct_scan = DicomImage {
+            path: path.to_string(),
+            modality: modality.to_string(),
+            columns,
+            rows,
+            frames,
+            voxels: Vec::with_capacity(columns * rows * frames)
+        };
 
         for current_file in files {
             if let Ok(dicom_file) = dicom::object::open_file(current_file) {
