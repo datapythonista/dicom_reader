@@ -3,10 +3,21 @@ name = "dicom_reader"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "dicom_reader"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "dicom_reader"
+path = "src/main.rs"
+
 [dependencies]
 #chrono = "0.4.26"
 dicom = "0.7.0"
 walkdir = "2.5"
+arrow = { version = "52.0", features = ["pyarrow"] }
+pyo3 = { version = "0.21", features = ["extension-module"] }
 #dicom-pixeldata = { version = "0.2.0", features = ["ndarray"] }
 #serde = { version = "1.0.183", features = ["derive"] }
 #serde_json = "1.0.105"
