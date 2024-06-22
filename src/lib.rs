@@ -1,20 +1,25 @@
 use pyo3::prelude::*;
 use arrow::pyarrow::ToPyArrow;
 mod reader;
-mod data;
 
-fn read_dicom(path: &str) -> Py<PyAny> {
-    let dicom_reader = reader::DicomReader::new(path);
-    let record_batch = data::create_record_batch(dicom_reader);
+fn read_dicom(path: &str, with_opts: bool) -> Py<PyAny> {
     Python::with_gil(|py| {
-        record_batch.to_pyarrow(py).unwrap()
+        if with_opts {
+            reader::DicomReader::new(path).to_record_batch_with_options(None, None)
+                                          .to_pyarrow(py)
+                                          .unwrap()
+        } else {
+            reader::DicomReader::new(path).to_record_batch()
+                                          .to_pyarrow(py)
+                                          .unwrap()
+        }
     })
 }
 
 #[pyfunction]
 #[pyo3(name="read_dicom")]
 fn read_dicom_to_pandas(path: &str) -> PyResult<Py<PyAny>> {
-    let pyarrow_record_batch = read_dicom(path);
+    let pyarrow_record_batch = read_dicom(path, false);
     Python::with_gil(|py| {
         let pandas_dataframe = pyarrow_record_batch.call_method0(py, "to_pandas").unwrap();
         Ok(pandas_dataframe)
@@ -24,7 +29,7 @@ fn read_dicom_to_pandas(path: &str) -> PyResult<Py<PyAny>> {
 #[pyfunction]
 #[pyo3(name="read_dicom")]
 fn read_dicom_to_polars(path: &str) -> PyResult<Py<PyAny>> {
-    let pyarrow_record_batch = read_dicom(path);
+    let pyarrow_record_batch = read_dicom(path, true);
     Python::with_gil(|py| {
         let polars = Python::import_bound(py, "polars").unwrap();
         let from_arrow = polars.getattr("from_arrow").unwrap();
