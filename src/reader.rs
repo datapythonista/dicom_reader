@@ -82,6 +82,7 @@ impl DicomReader {
         }
     }
 
+    #[allow(dead_code)]
     pub fn to_record_batch(self) -> RecordBatch {
         let mut path_builder = StringBuilder::new();
         let mut modality_builder = StringDictionaryBuilder::<Int16Type>::new();

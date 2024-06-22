@@ -1,7 +1,8 @@
 //use arrow::pyarrow::ToPyArrow;
 //use pyo3::prelude::*;
-use polars::prelude::{LazyFrame, AnonymousScan, AnonymousScanArgs, Schema,
-                      ScanArgsAnonymous, col, lit};
+// use polars::prelude::{AnonymousScan, AnonymousScanArgs, Schema};
+use polars::prelude::{LazyFrame, ScanArgsAnonymous, col, lit};
+use polars::datatypes::DataType;
 mod reader;
 mod scan;
 
@@ -27,6 +28,7 @@ fn main() {
     });
     */
 
+    /*
     let scan_opts = AnonymousScanArgs {
         n_rows: Some(2),
         with_columns: Some(std::sync::Arc::new(vec!["path".to_string(),
@@ -37,17 +39,29 @@ fn main() {
     };
     let dataframe = scan::DicomScan::new(data_dir).scan(scan_opts);
     println!("dataframe={dataframe:?}");
+    */
 
     let ldf = LazyFrame::anonymous_scan(
         std::sync::Arc::new(scan::DicomScan::new(&data_dir)),
         ScanArgsAnonymous::default(),
     ).unwrap();
 
-    let df = ldf.select([col("path"), col("modality"), col("frames")])
-                //.filter(col("frames").gt(30))
-                .filter(col("modality").eq(lit("PT")))
-                .limit(5)
-                .collect();
+    let df = ldf.filter(col("modality").eq(lit("CT")))
+                .with_column((col("rows").cast(DataType::UInt64)
+                              * col("columns")
+                              * col("frames")
+                             ).alias("total_voxels"))
+                .filter(col("total_voxels").lt(500 * 500 * 20))
+                .select([
+                    col("path"),
+                    col("modality"),
+                    col("total_voxels"),
+                    col("rows"),
+                    col("columns"),
+                    col("frames"),
+                ])
+                .fetch(30)
+                .unwrap();
 
     println!("result={df:?}");
 }
