@@ -20,8 +20,8 @@ pub struct DicomScan {
 }
 
 impl DicomScan {
-    pub fn new(path: &str) -> Self {
-        DicomScan { path: path.to_string() }
+    pub fn new(path: impl AsRef<std::path::Path>) -> Self {
+        DicomScan { path: path.as_ref().to_str().unwrap().to_string() }
     }
 }
 
@@ -73,7 +73,7 @@ fn recordbatch_to_polars_dataframe(record_batch: RecordBatch) -> PolarsResult<Da
 }
 
 pub trait DicomScanner {
-    fn scan_dicom(path: &str) -> PolarsResult<LazyFrame> {
+    fn scan_dicom(path: impl AsRef<std::path::Path>) -> PolarsResult<LazyFrame> {
         let function = DicomScan::new(path);
         let args = ScanArgsAnonymous::default();
 

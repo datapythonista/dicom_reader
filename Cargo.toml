@@ -13,13 +13,17 @@ name = "dicom_reader"
 path = "src/main.rs"
 
 [features]
-default = ["python"]
-python = ["dep:pyo3"]
+default = []
+python = [] # ["dep:pyo3"]
 
 [dependencies]
 walkdir = "2.5"
 dicom = "0.7.0"
 arrow = { version = "52.0", features = ["pyarrow"] }
-polars = { version = "0.40", features = ["lazy", "dtype-u16", "dtype-categorical", "streaming", "parquet"] }
-polars-arrow = { version = "0.40", features = ["arrow_rs"] }
-pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
+polars = { version = "0.41.2", features = ["lazy", "dtype-u16", "dtype-categorical", "streaming", "parquet"] }
+polars-arrow = { version = "0.41.2", features = ["arrow_rs"] }
+# pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
+datafusion = { version = "39.0" }
+datafusion-expr = { version = "39.0" }
+async-trait = { version = "0.1.80" }
+tokio = "1.38.0"

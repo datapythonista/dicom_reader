@@ -68,7 +68,7 @@ pub struct DicomReader {
     index: usize,
 }
 impl DicomReader {
-    pub fn new(path: &str) -> Self {
+    pub fn new(path: impl AsRef<std::path::Path>) -> Self {
         let mut dicom_directories = HashSet::new();
 
         for entry in walkdir::WalkDir::new(path).sort_by_file_name().into_iter().filter_map(|x| x.ok()) {

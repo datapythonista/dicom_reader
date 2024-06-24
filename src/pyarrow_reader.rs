@@ -7,10 +7,8 @@ use crate::reader;
 pub fn read_dicom_to_pandas(path: &str) -> PyResult<Py<PyAny>> {
     Python::with_gil(|py| {
         Ok(reader::DicomReader::new(path).to_record_batch()
-                                         .to_pyarrow(py)
-                                         .unwrap()
-                                         .call_method0(py, "to_pandas")
-                                         .unwrap())
+                                         .to_pyarrow(py)?
+                                         .call_method0(py, "to_pandas")?)
     })
 }
 
@@ -19,13 +17,10 @@ pub fn read_dicom_to_pandas(path: &str) -> PyResult<Py<PyAny>> {
 pub fn read_dicom_to_polars(path: &str) -> PyResult<Py<PyAny>> {
     Python::with_gil(|py| {
         let pyarrow_record_batch = reader::DicomReader::new(path).to_record_batch()
-                                                                 .to_pyarrow(py)
-                                                                 .unwrap();
+                                                                 .to_pyarrow(py)?;
         Ok(Python::import_bound(py, "polars").unwrap()
-                                             .getattr("from_arrow")
-                                             .unwrap()
-                                             .call1((pyarrow_record_batch,))
-                                             .unwrap()
+                                             .getattr("from_arrow")?
+                                             .call1((pyarrow_record_batch,))?
                                              .into())
     })
 }
