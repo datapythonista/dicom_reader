@@ -133,6 +133,9 @@ impl DicomReader {
                                         n_rows: Option<usize>,
                                         columns: Option<Vec<&str>>) -> RecordBatch {
 
+        println!("DICOM Reader number of rows to fetch: {:?}", n_rows);
+        println!("DICOM Reader columns to fetch: {:?}", columns);
+
         let iterator: Box<dyn Iterator<Item=DicomImage>> = match n_rows {
             Some(num_rows) => { Box::new(self.take(num_rows)) }
             None => { Box::new(self) }

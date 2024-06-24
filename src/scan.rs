@@ -3,13 +3,15 @@ use std::sync::Arc;
 use arrow::record_batch::RecordBatch;
 use polars::prelude::{AnonymousScan,
                       AnonymousScanArgs,
+                      LazyFrame,
                       DataFrame,
                       Series,
                       PolarsResult,
                       Schema,
                       ArrowSchema,
                       ArrowField,
-                      ArrowDataType};
+                      ArrowDataType,
+                      ScanArgsAnonymous};
 use polars_arrow::datatypes::IntegerType::Int16;
 use crate::reader;
 
@@ -28,12 +30,12 @@ impl AnonymousScan for DicomScan {
         self
     }
     fn scan(&self, scan_opts: AnonymousScanArgs) -> PolarsResult<DataFrame> {
+        println!("AnonymousScan with_columns received: {:?}", scan_opts.with_columns);
         let mut projection: Option<Vec<&str>> = None;
 
         if let Some(ref columns) = scan_opts.with_columns {
             projection = Some(columns.iter().map(|string| { string.as_str() }).collect());
         }
-
 
         let record_batch = reader::DicomReader::new(&self.path)
             .to_record_batch_with_options(scan_opts.n_rows,
@@ -69,3 +71,14 @@ fn recordbatch_to_polars_dataframe(record_batch: RecordBatch) -> PolarsResult<Da
                                .collect())
 
 }
+
+pub trait DicomScanner {
+    fn scan_dicom(path: &str) -> PolarsResult<LazyFrame> {
+        let function = DicomScan::new(path);
+        let args = ScanArgsAnonymous::default();
+
+        LazyFrame::anonymous_scan(Arc::new(function), args)
+    }
+}
+
+impl DicomScanner for LazyFrame {}
