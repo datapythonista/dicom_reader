@@ -82,7 +82,6 @@ impl DicomReader {
         }
     }
 
-    #[allow(dead_code)]
     pub fn to_record_batch(self) -> RecordBatch {
         let mut path_builder = StringBuilder::new();
         let mut modality_builder = StringDictionaryBuilder::<Int16Type>::new();
@@ -114,7 +113,8 @@ impl DicomReader {
             Field::new("frames", DataType::UInt16, false),
             Field::new("voxels", DataType::LargeBinary, false),
         ]);
-        let record_batch = RecordBatch::try_new(
+
+        RecordBatch::try_new(
             Arc::new(schema),
             vec![
                 Arc::new(path_builder.finish()),
@@ -124,9 +124,7 @@ impl DicomReader {
                 Arc::new(frames_builder.finish()),
                 Arc::new(voxels_builder.finish()),
             ],
-        ).unwrap();
-
-        record_batch
+        ).unwrap()
     }
 
     pub fn to_record_batch_with_options(self,

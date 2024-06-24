@@ -1,14 +1,14 @@
 use polars::prelude::{LazyFrame, col, lit};
 use polars::prelude::{ParquetWriteOptions, ParquetCompression};
 use polars::datatypes::DataType;
-use crate::scan::DicomScanner;
+use crate::polars_reader::DicomScanner;
 mod reader;
-mod scan;
+mod polars_reader;
 
 fn main() {
     let data_dir = "/home/mgarcia/src/dicom_reader/data/manifest-1677266205028";
 
-    let q = LazyFrame::scan_dicom(&data_dir).unwrap()
+    let q = LazyFrame::scan_dicom(data_dir).unwrap()
                 .with_streaming(true)
                 .filter(col("modality").eq(lit("CT")))
                 .with_column((col("rows").cast(DataType::UInt64)
