@@ -8,79 +8,75 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties, Partitioning, ExecutionMode,
-                                RecordBatchStream, DisplayAs, DisplayFormatType};
+                                RecordBatchStream, DisplayAs, DisplayFormatType, project_schema};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion_expr::Expr;
 use datafusion::error::DataFusionError;
 use crate::reader;
 
+type ResultExecute = Result<Pin<Box<dyn RecordBatchStream<Item = Result<RecordBatch,
+                                                                        DataFusionError>> + Send>>,
+                            DataFusionError>;
+
 #[derive(Debug)]
 struct DicomExecutionPlan {
     path: PathBuf,
     properties: PlanProperties,
-    projection: Option<Vec<usize>>,
     limit: Option<usize>,
 }
 
 impl DicomExecutionPlan {
     fn new(path: impl AsRef<Path>,
            schema: Arc<Schema>,
-           projection: Option<Vec<usize>>,
+           projection: Option<&Vec<usize>>,
            limit: Option<usize>) -> Self {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let partitioning = Partitioning::UnknownPartitioning(1);
-        let execution_mode = ExecutionMode::Bounded;
-        let properties = PlanProperties::new(eq_properties, partitioning, execution_mode);
+
+        let projected_schema = project_schema(&schema, projection).unwrap();
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(projected_schema.clone()),
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        );
 
         DicomExecutionPlan {
             path: path.as_ref().to_path_buf(),
             properties,
-            projection,
             limit,
         }
     }
 }
 
 impl DisplayAs for DicomExecutionPlan {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt_as(&self,
+              _t: DisplayFormatType,
+              f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "DicomExecutionPlan")
     }
 }
 
-type ResultExecute = Result<Pin<Box<dyn RecordBatchStream<Item = Result<RecordBatch,
-                                                                        DataFusionError>> + Send>>,
-                            DataFusionError>;
 
 impl ExecutionPlan for DicomExecutionPlan {
     fn execute(&self,
                _partition: usize,
                _context: Arc<TaskContext>) -> ResultExecute {
 
-        let proj: Option<Vec<String>> = match self.projection {
-            Some(ref proj_indices) => {
-                Some(self.schema()
-                         .project(proj_indices)?
-                         .fields
-                         .iter()
-                         .map(|f| f.name().to_string())
-                         .collect())
-            }
-            None => None
-        };
-        let proj_str: Option<Vec<&str>> = if let Some(ref proj_vec) = proj {
-            Some(proj_vec.iter().map(|item| item.as_str()).collect())
-        } else {
-            None
-        };
+        let columns = self.properties
+                          .equivalence_properties()
+                          .schema()
+                          .fields
+                          .into_iter()
+                          .map(|f| f.name().to_string())
+                          .collect::<Vec<_>>();
 
+        let columns_str = columns.iter().map(|c| c.as_str()).collect();
         let record_batch = reader::DicomReader::new(&self.path)
-            .to_record_batch_with_options(self.limit, proj_str);
+            .to_record_batch_with_options(self.limit, Some(columns_str));
 
         let record_batch_streamer = MemoryStream::try_new(
             vec![record_batch],
             self.properties.equivalence_properties().schema().clone(),
-            self.projection.clone(),
+            None,
         )?;
         Ok(Box::pin(record_batch_streamer))
     }
@@ -116,12 +112,9 @@ impl TableProvider for DicomTableProvider {
                   projection: Option<&Vec<usize>>,
                   _filters: &[Expr],
                   limit: Option<usize>) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        println!("limit: {:?}", limit);
-        println!("projection: {:?}", projection);
-
         Ok(Arc::new(DicomExecutionPlan::new(&self.path,
                                             self.schema(),
-                                            projection.cloned(),
+                                            projection,
                                             limit)))
     }
     fn table_type(&self) -> TableType {

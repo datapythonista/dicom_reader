@@ -15,17 +15,14 @@ pub struct DicomImage {
     pub columns: usize,
     pub rows: usize,
     pub frames: usize,
-    pub voxels: Vec<i16>,
+    files: Vec<std::path::PathBuf>,
 }
 impl DicomImage {
-    fn new(files: Vec<&std::path::Path>) -> Self {
-        let options = dicom::pixeldata::ConvertOptions::new()
-            .with_modality_lut(dicom::pixeldata::ModalityLutOption::None)
-            .with_voi_lut(dicom::pixeldata::VoiLutOption::Default)
-            .with_bit_depth(dicom::pixeldata::BitDepthOption::Auto);
+    fn new(files: Vec<impl AsRef<std::path::Path>>) -> Self {
+        let first_file = files[0].as_ref();
 
-        let path = files[0].parent().unwrap().to_str().unwrap();
-        let first_dicom_file = dicom::object::open_file(files[0]).unwrap();
+        let path = first_file.parent().unwrap().to_str().unwrap();
+        let first_dicom_file = dicom::object::open_file(first_file).unwrap();
         let pixel_data = first_dicom_file.decode_pixel_data().unwrap();
         let columns = pixel_data.columns() as usize;
         let rows = pixel_data.rows() as usize;
@@ -40,21 +37,29 @@ impl DicomImage {
             panic!("Only monochrome files are supported. Found samples_per_pixel={}", pixel_data.samples_per_pixel());
         }
 
-        let mut ct_scan = DicomImage {
+        DicomImage {
             path: path.to_string(),
             modality: modality.to_string(),
             columns,
             rows,
             frames,
-            voxels: Vec::with_capacity(columns * rows * frames)
-        };
+            files: files.iter().map(|x| x.as_ref().to_path_buf()).collect(),
+        }
+    }
+    fn voxels(&self) -> Vec<i16> {
+        let mut result = Vec::with_capacity(self.columns * self.rows * self.frames);
 
-        for current_file in files {
+        let options = dicom::pixeldata::ConvertOptions::new()
+            .with_modality_lut(dicom::pixeldata::ModalityLutOption::None)
+            .with_voi_lut(dicom::pixeldata::VoiLutOption::Default)
+            .with_bit_depth(dicom::pixeldata::BitDepthOption::Auto);
+
+        for current_file in self.files.iter() {
             if let Ok(dicom_file) = dicom::object::open_file(current_file) {
-                ct_scan.voxels.extend_from_slice(&dicom_file.decode_pixel_data().unwrap().to_vec_with_options(&options).unwrap());
+                result.extend_from_slice(&dicom_file.decode_pixel_data().unwrap().to_vec_with_options(&options).unwrap());
             }
         }
-        ct_scan
+        result
     }
 }
 impl std::fmt::Debug for DicomImage {
@@ -91,14 +96,15 @@ impl DicomReader {
         let mut voxels_builder = LargeBinaryBuilder::new();
 
         for dicom_image in self.take(3) {
+            let voxels = dicom_image.voxels();
             path_builder.append_value(dicom_image.path);
             modality_builder.append_value(dicom_image.modality);
             columns_builder.append_value(dicom_image.columns.try_into().unwrap());
             rows_builder.append_value(dicom_image.rows.try_into().unwrap());
             frames_builder.append_value(dicom_image.frames.try_into().unwrap());
             let voxels_bytes: &[u8] = unsafe { std::slice::from_raw_parts(
-                dicom_image.voxels.as_ptr() as *const u8,
-                dicom_image.voxels.len() * 2,
+                voxels.as_ptr() as *const u8,
+                voxels.len() * 2,
             ) };
             voxels_builder.append_value(voxels_bytes);
         }
@@ -131,8 +137,8 @@ impl DicomReader {
                                         n_rows: Option<usize>,
                                         columns: Option<Vec<&str>>) -> RecordBatch {
 
-        println!("DICOM Reader number of rows to fetch: {:?}", n_rows);
-        println!("DICOM Reader columns to fetch: {:?}", columns);
+        println!("DICOM Reader: Received number of rows to fetch: {:?}", n_rows);
+        println!("DICOM Reader: Received columns to fetch: {:?}", columns);
 
         let iterator: Box<dyn Iterator<Item=DicomImage>> = match n_rows {
             Some(num_rows) => { Box::new(self.take(num_rows)) }
@@ -181,10 +187,10 @@ impl DicomReader {
 
         for dicom_image in iterator {
             if fetch_path {
-                path_builder.append_value(dicom_image.path);
+                path_builder.append_value(dicom_image.path.clone());
             }
             if fetch_modality {
-                modality_builder.append_value(dicom_image.modality);
+                modality_builder.append_value(dicom_image.modality.clone());
             }
             if fetch_columns {
                 columns_builder.append_value(dicom_image.columns.try_into().unwrap());
@@ -196,9 +202,10 @@ impl DicomReader {
                 frames_builder.append_value(dicom_image.frames.try_into().unwrap());
             }
             if fetch_voxels {
+                let voxels = dicom_image.voxels();
                 let voxels_bytes: &[u8] = unsafe { std::slice::from_raw_parts(
-                    dicom_image.voxels.as_ptr() as *const u8,
-                    dicom_image.voxels.len() * 2,
+                    voxels.as_ptr() as *const u8,
+                    voxels.len() * 2,
                 ) };
                 voxels_builder.append_value(voxels_bytes);
             }

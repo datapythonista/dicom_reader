@@ -46,15 +46,27 @@ fn exec_polars_pipeline(path: impl AsRef<std::path::Path>) {
 async fn exec_datafusion_pipeline(path: impl AsRef<std::path::Path>) {
     let ctx = SessionContext::new();
     let dicom_table = datafusion_reader::DicomTableProvider::new(&path);
-    ctx.register_table("dicom_table", std::sync::Arc::new(dicom_table)).unwrap();
+    ctx.register_table("dicom_table", std::sync::Arc::new(dicom_table))
+        .unwrap();
 
-    let plan = ctx.sql(
-        "SELECT path, modality, frames FROM dicom_table WHERE modality = 'CT';"
+    let plan = ctx.sql("
+        SELECT SPLIT_PART(path, '/', -1),
+               columns,
+               rows,
+               frames,
+               rows * columns * frames AS total_voxels
+        FROM dicom_table
+        WHERE modality = 'CT'
+        ORDER BY total_voxels DESC
+        LIMIT 20;
+        "
     ).await.unwrap();
 
     let result = plan.collect().await.unwrap();
-    let pretty_result = arrow::util::pretty::pretty_format_batches(&result).unwrap().to_string();
-    println!("datafusion df = {}", pretty_result);
+    let pretty_result = arrow::util::pretty::pretty_format_batches(&result)
+        .unwrap()
+        .to_string();
+    println!("{pretty_result}");
 }
 
 #[tokio::main]
