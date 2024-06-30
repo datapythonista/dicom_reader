@@ -2,6 +2,7 @@ use futures::stream::StreamExt;
 use polars::prelude::{LazyFrame, col, lit};
 //use polars::prelude::{ParquetWriteOptions, ParquetCompression};
 use polars::datatypes::DataType;
+use datafusion::prelude::SessionConfig;
 use datafusion::execution::context::SessionContext;
 use crate::polars_reader::DicomScanner;
 mod reader;
@@ -45,7 +46,8 @@ fn exec_polars_pipeline(path: impl AsRef<std::path::Path>) {
 }
 
 async fn exec_datafusion_pipeline(path: impl AsRef<std::path::Path>) {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().with_batch_size(5);
+    let ctx = SessionContext::new_with_config(config);
     let dicom_table = datafusion_reader::DicomTableProvider::new(&path);
     ctx.register_table("dicom_table", std::sync::Arc::new(dicom_table))
         .unwrap();
@@ -57,8 +59,8 @@ async fn exec_datafusion_pipeline(path: impl AsRef<std::path::Path>) {
                frames,
                rows * columns * frames AS total_voxels
         FROM dicom_table
-        -- WHERE modality = 'CT'
-        -- ORDER BY total_voxels DESC
+        WHERE modality = 'CT'
+        ORDER BY total_voxels DESC
         LIMIT 30;
         "
     ).await.unwrap();

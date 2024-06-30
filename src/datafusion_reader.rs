@@ -59,7 +59,7 @@ impl DisplayAs for DicomExecutionPlan {
 impl ExecutionPlan for DicomExecutionPlan {
     fn execute(&self,
                _partition: usize,
-               _context: Arc<TaskContext>) -> ResultExecute {
+               context: Arc<TaskContext>) -> ResultExecute {
 
         let columns = self.properties
                           .equivalence_properties()
@@ -73,11 +73,14 @@ impl ExecutionPlan for DicomExecutionPlan {
                                  .map(|c| c.as_str())
                                  .collect::<Vec<_>>();
 
+        let batch_size = context.session_config().batch_size();
+
         let record_batch_streamer = RecordBatchStreamAdapter::new(
             self.properties.equivalence_properties().schema().clone(),
             reader::DicomStreamer::new(&self.path)
                 .with_projection(Some(columns_str))
-                .with_limit(self.limit),
+                .with_limit(self.limit)
+                .with_batch_size(Some(batch_size)),
         );
         Ok(Box::pin(record_batch_streamer))
     }

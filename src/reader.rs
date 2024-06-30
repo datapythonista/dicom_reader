@@ -163,7 +163,7 @@ pub struct DicomStreamer {
     projection: Option<Vec<String>>,
     limit: Option<usize>,
     remaining_limit: Option<usize>,
-    batch_size: usize,
+    batch_size: Option<usize>,
 }
 
 impl DicomStreamer {
@@ -174,7 +174,7 @@ impl DicomStreamer {
             projection: None,
             limit: None,
             remaining_limit: None,
-            batch_size: 3,
+            batch_size: None,
         }
     }
 
@@ -193,27 +193,29 @@ impl DicomStreamer {
         self
     }
 
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
         self.batch_size = batch_size;
         self
     }
 
-    pub fn to_record_batch(&mut self, streaming: bool) -> Option<RecordBatch> {
+    pub fn to_record_batch(&mut self) -> Option<RecordBatch> {
         let mut batch_iterator: Box<dyn Iterator<Item=DicomImage>> = Box::new(&mut self.row_iterator);
 
-        let rows_to_fetch = if let Some(limit) = self.remaining_limit {
-            if limit < self.batch_size {
-                limit
+        if let Some(limit) = self.remaining_limit {
+            if let Some(batch_size) = self.batch_size {
+                if limit < batch_size {
+                    batch_iterator = Box::new(batch_iterator.take(limit));
+                } else {
+                    (*self).remaining_limit = Some(limit - batch_size);
+                    batch_iterator = Box::new(batch_iterator.take(batch_size));
+                }
             } else {
-                (*self).remaining_limit = Some(limit - self.batch_size);
-                self.batch_size
+                batch_iterator = Box::new(batch_iterator.take(limit));
             }
         } else {
-            self.batch_size
-        };
-
-        if streaming {
-            batch_iterator = Box::new(batch_iterator.take(rows_to_fetch));
+            if let Some(batch_size) = self.batch_size {
+                batch_iterator = Box::new(batch_iterator.take(batch_size));
+            }
         };
 
         let (mut fetch_path,
@@ -325,7 +327,7 @@ impl Stream for DicomStreamer {
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
         let self_unpinned = Pin::get_mut(self);
-        let result = self_unpinned.to_record_batch(true);
+        let result = self_unpinned.to_record_batch();
 
         if let Some(record_batch) = result {
             Poll::Ready(Some(Ok(record_batch)))

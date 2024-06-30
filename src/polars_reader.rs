@@ -39,7 +39,7 @@ impl AnonymousScan for DicomScan {
         let record_batch = reader::DicomStreamer::new(&self.path)
             .with_limit(scan_opts.n_rows)
             .with_projection(projection)
-            .to_record_batch(false)
+            .to_record_batch()
             .unwrap();
         recordbatch_to_polars_dataframe(record_batch)
     }
