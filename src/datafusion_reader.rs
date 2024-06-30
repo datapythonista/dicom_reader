@@ -72,13 +72,12 @@ impl ExecutionPlan for DicomExecutionPlan {
         let columns_str = columns.iter()
                                  .map(|c| c.as_str())
                                  .collect::<Vec<_>>();
-        let dicom_reader = reader::DicomReader::new(&self.path)
-            .with_projection(Some(columns_str))
-            .with_limit(self.limit);
 
         let record_batch_streamer = RecordBatchStreamAdapter::new(
             self.properties.equivalence_properties().schema().clone(),
-            reader::DicomReaderStreamer::new(dicom_reader),
+            reader::DicomStreamer::new(&self.path)
+                .with_projection(Some(columns_str))
+                .with_limit(self.limit),
         );
         Ok(Box::pin(record_batch_streamer))
     }

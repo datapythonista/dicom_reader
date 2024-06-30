@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use futures_core::Stream;
+use futures::Stream;
 use dicom::pixeldata::PixelDecoder;
 use dicom::dictionary_std::tags;
 use arrow::datatypes::{Schema, Field, DataType, Int16Type};
@@ -74,9 +74,6 @@ impl std::fmt::Debug for DicomImage {
 
 pub struct DicomReader {
     dicom_directories: Vec<String>,
-    projection: Option<Vec<String>>,
-    limit: Option<usize>,
-    batch_size: usize,
 }
 impl DicomReader {
     pub fn new(path: impl AsRef<std::path::Path>) -> Self {
@@ -89,29 +86,7 @@ impl DicomReader {
         }
         DicomReader {
             dicom_directories: dicom_directories.into_iter().collect::<Vec<_>>(),
-            projection: None,
-            limit: None,
-            batch_size: 10,
         }
-    }
-
-    pub fn with_projection(mut self, projection: Option<Vec<&str>>) -> Self {
-        self.projection = projection.map(|vec| {
-            vec.into_iter()
-               .map(|x| x.to_string())
-               .collect()
-        });
-        self
-    }
-
-    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
-        self.limit = limit;
-        self
-    }
-
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
-        self.batch_size = batch_size;
-        self
     }
 
     pub fn iter(&self) -> DicomIter {
@@ -121,156 +96,6 @@ impl DicomReader {
         }
     }
 
-    pub fn to_record_batch(&self) -> RecordBatch {
-
-        if self.limit.is_some() | self.projection.is_some() {
-            self.to_record_batch_with_options()
-        } else {
-            self.to_record_batch_no_options()
-        }
-    }
-
-    fn to_record_batch_no_options(&self) -> RecordBatch {
-        let mut path_builder = StringBuilder::new();
-        let mut modality_builder = StringDictionaryBuilder::<Int16Type>::new();
-        let mut columns_builder = UInt16Builder::new();
-        let mut rows_builder = UInt16Builder::new();
-        let mut frames_builder = UInt16Builder::new();
-        let mut voxels_builder = LargeBinaryBuilder::new();
-
-        for dicom_image in self.iter() {
-            let voxels = dicom_image.voxels();
-            path_builder.append_value(dicom_image.path);
-            modality_builder.append_value(dicom_image.modality);
-            columns_builder.append_value(dicom_image.columns.try_into().unwrap());
-            rows_builder.append_value(dicom_image.rows.try_into().unwrap());
-            frames_builder.append_value(dicom_image.frames.try_into().unwrap());
-            let voxels_bytes: &[u8] = unsafe { std::slice::from_raw_parts(
-                voxels.as_ptr() as *const u8,
-                voxels.len() * 2,
-            ) };
-            voxels_builder.append_value(voxels_bytes);
-        }
-        let schema = Schema::new(vec![
-            Field::new("path", DataType::Utf8, false),
-            Field::new("modality", DataType::Dictionary(
-                                        Box::new(DataType::Int16),
-                                        Box::new(DataType::Utf8)),
-                       false),
-            Field::new("columns", DataType::UInt16, false),
-            Field::new("rows", DataType::UInt16, false),
-            Field::new("frames", DataType::UInt16, false),
-            Field::new("voxels", DataType::LargeBinary, false),
-        ]);
-
-        RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(path_builder.finish()),
-                Arc::new(modality_builder.finish()),
-                Arc::new(columns_builder.finish()),
-                Arc::new(rows_builder.finish()),
-                Arc::new(frames_builder.finish()),
-                Arc::new(voxels_builder.finish()),
-            ],
-        ).unwrap()
-    }
-
-    pub fn to_record_batch_with_options(&self) -> RecordBatch {
-        let (mut fetch_path,
-             mut fetch_modality,
-             mut fetch_columns,
-             mut fetch_rows,
-             mut fetch_frames,
-             mut fetch_voxels) = (true, true, true, true, true, true);
-
-        if let Some(ref columns) = self.projection {
-            let columns_set: HashSet<&str> = columns.into_iter()
-                                                    .map(|x| x.as_str())
-                                                    .collect();
-
-            let known_columns = vec!["path", "modality", "columns", "rows", "frames", "voxels"]
-                .into_iter()
-                .collect::<HashSet<_>>();
-            let unknown_columns = columns_set.difference(&known_columns).collect::<Vec<_>>();
-            if !unknown_columns.is_empty() {
-                panic!("Unknown columns: {:?}", unknown_columns);
-            }
-            fetch_path = columns_set.contains("path");
-            fetch_modality = columns_set.contains("modality");
-            fetch_columns = columns_set.contains("columns");
-            fetch_rows = columns_set.contains("rows");
-            fetch_frames = columns_set.contains("frames");
-            fetch_voxels = columns_set.contains("voxels");
-        }
-
-        // Can we avoid creating the builders?
-        let mut path_builder = StringBuilder::new();
-        let mut modality_builder = StringDictionaryBuilder::<Int16Type>::new();
-        let mut columns_builder = UInt16Builder::new();
-        let mut rows_builder = UInt16Builder::new();
-        let mut frames_builder = UInt16Builder::new();
-        let mut voxels_builder = LargeBinaryBuilder::new();
-
-        for dicom_image in self.iter().take(5) {
-            if fetch_path {
-                path_builder.append_value(dicom_image.path.clone());
-            }
-            if fetch_modality {
-                modality_builder.append_value(dicom_image.modality.clone());
-            }
-            if fetch_columns {
-                columns_builder.append_value(dicom_image.columns.try_into().unwrap());
-            }
-            if fetch_rows {
-                rows_builder.append_value(dicom_image.rows.try_into().unwrap());
-            }
-            if fetch_frames {
-                frames_builder.append_value(dicom_image.frames.try_into().unwrap());
-            }
-            if fetch_voxels {
-                let voxels = dicom_image.voxels();
-                let voxels_bytes: &[u8] = unsafe { std::slice::from_raw_parts(
-                    voxels.as_ptr() as *const u8,
-                    voxels.len() * 2,
-                ) };
-                voxels_builder.append_value(voxels_bytes);
-            }
-        }
-
-        let mut fields: Vec<Field> = Vec::new();
-        let mut arrays: Vec<ArrayRef> = Vec::new();
-
-        if fetch_path {
-            fields.push(Field::new("path", DataType::Utf8, false));
-            arrays.push(Arc::new(path_builder.finish()));
-        }
-        if fetch_modality {
-            fields.push(Field::new("modality", DataType::Dictionary(
-                                                    Box::new(DataType::Int16),
-                                                    Box::new(DataType::Utf8)),
-                                   false));
-            arrays.push(Arc::new(modality_builder.finish()));
-        }
-        if fetch_columns {
-            fields.push(Field::new("columns", DataType::UInt16, false));
-            arrays.push(Arc::new(columns_builder.finish()));
-        }
-        if fetch_rows {
-            fields.push(Field::new("rows", DataType::UInt16, false));
-            arrays.push(Arc::new(rows_builder.finish()));
-        }
-        if fetch_frames {
-            fields.push(Field::new("frames", DataType::UInt16, false));
-            arrays.push(Arc::new(frames_builder.finish()));
-        }
-        if fetch_voxels {
-            fields.push(Field::new("voxels", DataType::LargeBinary, false));
-            arrays.push(Arc::new(voxels_builder.finish()));
-        }
-
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap()
-    }
 }
 
 impl<'a> IntoIterator for DicomReader {
@@ -333,33 +158,179 @@ impl Iterator for DicomReaderIterator {
     }
 }
 
-pub struct DicomReaderStreamer {
-    dicom_reader_iterator: DicomReaderIterator,
-    sent_data: bool,
+pub struct DicomStreamer {
+    row_iterator: DicomReaderIterator,
+    projection: Option<Vec<String>>,
+    limit: Option<usize>,
+    remaining_limit: Option<usize>,
+    batch_size: usize,
 }
 
-impl DicomReaderStreamer {
-    pub fn new(reader: DicomReader) -> Self {
-        DicomReaderStreamer {
-            dicom_reader_iterator: reader.into_iter(),
-            sent_data: false,
+impl DicomStreamer {
+    pub fn new(path: impl AsRef<std::path::Path>) -> Self {
+        let reader = DicomReader::new(path);
+        DicomStreamer {
+            row_iterator: reader.into_iter(),
+            projection: None,
+            limit: None,
+            remaining_limit: None,
+            batch_size: 3,
         }
+    }
+
+    pub fn with_projection(mut self, projection: Option<Vec<&str>>) -> Self {
+        self.projection = projection.map(|vec| {
+            vec.into_iter()
+               .map(|x| x.to_string())
+               .collect()
+        });
+        self
+    }
+
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self.remaining_limit = limit;
+        self
+    }
+
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    pub fn to_record_batch(&mut self, streaming: bool) -> Option<RecordBatch> {
+        let mut batch_iterator: Box<dyn Iterator<Item=DicomImage>> = Box::new(&mut self.row_iterator);
+
+        let rows_to_fetch = if let Some(limit) = self.remaining_limit {
+            if limit < self.batch_size {
+                limit
+            } else {
+                (*self).remaining_limit = Some(limit - self.batch_size);
+                self.batch_size
+            }
+        } else {
+            self.batch_size
+        };
+
+        if streaming {
+            batch_iterator = Box::new(batch_iterator.take(rows_to_fetch));
+        };
+
+        let (mut fetch_path,
+             mut fetch_modality,
+             mut fetch_columns,
+             mut fetch_rows,
+             mut fetch_frames,
+             mut fetch_voxels) = (true, true, true, true, true, true);
+
+        if let Some(ref columns) = self.projection {
+            let columns_set: HashSet<&str> = columns.into_iter()
+                                                    .map(|x| x.as_str())
+                                                    .collect();
+
+            let known_columns = vec!["path", "modality", "columns", "rows", "frames", "voxels"]
+                .into_iter()
+                .collect::<HashSet<_>>();
+            let unknown_columns = columns_set.difference(&known_columns).collect::<Vec<_>>();
+            if !unknown_columns.is_empty() {
+                panic!("Unknown columns: {:?}", unknown_columns);
+            }
+            fetch_path = columns_set.contains("path");
+            fetch_modality = columns_set.contains("modality");
+            fetch_columns = columns_set.contains("columns");
+            fetch_rows = columns_set.contains("rows");
+            fetch_frames = columns_set.contains("frames");
+            fetch_voxels = columns_set.contains("voxels");
+        }
+
+        // Can we avoid creating the builders?
+        let mut path_builder = StringBuilder::new();
+        let mut modality_builder = StringDictionaryBuilder::<Int16Type>::new();
+        let mut columns_builder = UInt16Builder::new();
+        let mut rows_builder = UInt16Builder::new();
+        let mut frames_builder = UInt16Builder::new();
+        let mut voxels_builder = LargeBinaryBuilder::new();
+
+        let mut empty_iterator = true;
+
+        for dicom_image in batch_iterator {
+            empty_iterator = false;
+
+            if fetch_path {
+                path_builder.append_value(dicom_image.path.clone());
+            }
+            if fetch_modality {
+                modality_builder.append_value(dicom_image.modality.clone());
+            }
+            if fetch_columns {
+                columns_builder.append_value(dicom_image.columns.try_into().unwrap());
+            }
+            if fetch_rows {
+                rows_builder.append_value(dicom_image.rows.try_into().unwrap());
+            }
+            if fetch_frames {
+                frames_builder.append_value(dicom_image.frames.try_into().unwrap());
+            }
+            if fetch_voxels {
+                let voxels = dicom_image.voxels();
+                let voxels_bytes: &[u8] = unsafe { std::slice::from_raw_parts(
+                    voxels.as_ptr() as *const u8,
+                    voxels.len() * 2,
+                ) };
+                voxels_builder.append_value(voxels_bytes);
+            }
+        }
+
+        if empty_iterator {
+            return None;
+        }
+
+        let mut fields: Vec<Field> = Vec::new();
+        let mut arrays: Vec<ArrayRef> = Vec::new();
+
+        if fetch_path {
+            fields.push(Field::new("path", DataType::Utf8, false));
+            arrays.push(Arc::new(path_builder.finish()));
+        }
+        if fetch_modality {
+            fields.push(Field::new("modality", DataType::Dictionary(
+                                                    Box::new(DataType::Int16),
+                                                    Box::new(DataType::Utf8)),
+                                   false));
+            arrays.push(Arc::new(modality_builder.finish()));
+        }
+        if fetch_columns {
+            fields.push(Field::new("columns", DataType::UInt16, false));
+            arrays.push(Arc::new(columns_builder.finish()));
+        }
+        if fetch_rows {
+            fields.push(Field::new("rows", DataType::UInt16, false));
+            arrays.push(Arc::new(rows_builder.finish()));
+        }
+        if fetch_frames {
+            fields.push(Field::new("frames", DataType::UInt16, false));
+            arrays.push(Arc::new(frames_builder.finish()));
+        }
+        if fetch_voxels {
+            fields.push(Field::new("voxels", DataType::LargeBinary, false));
+            arrays.push(Arc::new(voxels_builder.finish()));
+        }
+
+        Some(RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap())
     }
 }
 
-impl Stream for DicomReaderStreamer {
+impl Stream for DicomStreamer {
     type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if self.sent_data {
-            Poll::Ready(None)
-        } else {
-            let dicom_reader_streamer = Pin::get_mut(self);
-            (*dicom_reader_streamer).sent_data = true;
-            let record_batch = dicom_reader_streamer.dicom_reader_iterator
-                                                    .dicom_reader
-                                                    .to_record_batch();
+        let self_unpinned = Pin::get_mut(self);
+        let result = self_unpinned.to_record_batch(true);
+
+        if let Some(record_batch) = result {
             Poll::Ready(Some(Ok(record_batch)))
+        } else {
+            Poll::Ready(None)
         }
     }
 }

@@ -30,17 +30,17 @@ impl AnonymousScan for DicomScan {
         self
     }
     fn scan(&self, scan_opts: AnonymousScanArgs) -> PolarsResult<DataFrame> {
-        println!("AnonymousScan with_columns received: {:?}", scan_opts.with_columns);
         let mut projection: Option<Vec<&str>> = None;
 
         if let Some(ref columns) = scan_opts.with_columns {
             projection = Some(columns.iter().map(|string| { string.as_str() }).collect());
         }
 
-        let record_batch = reader::DicomReader::new(&self.path)
+        let record_batch = reader::DicomStreamer::new(&self.path)
             .with_limit(scan_opts.n_rows)
             .with_projection(projection)
-            .to_record_batch();
+            .to_record_batch(false)
+            .unwrap();
         recordbatch_to_polars_dataframe(record_batch)
     }
     fn schema(&self, _infer_schema_length: Option<usize>) -> PolarsResult<Arc<Schema>> {

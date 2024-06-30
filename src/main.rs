@@ -1,3 +1,4 @@
+use futures::stream::StreamExt;
 use polars::prelude::{LazyFrame, col, lit};
 //use polars::prelude::{ParquetWriteOptions, ParquetCompression};
 use polars::datatypes::DataType;
@@ -56,11 +57,18 @@ async fn exec_datafusion_pipeline(path: impl AsRef<std::path::Path>) {
                frames,
                rows * columns * frames AS total_voxels
         FROM dicom_table
-        WHERE modality = 'CT'
-        ORDER BY total_voxels DESC
-        LIMIT 20;
+        -- WHERE modality = 'CT'
+        -- ORDER BY total_voxels DESC
+        LIMIT 30;
         "
     ).await.unwrap();
+
+    let mut stream = plan.clone().execute_stream().await.unwrap();
+    println!("Stream schema: {}", stream.schema());
+
+    while let Some(batch) = stream.next().await {
+        println!("num_rows: {:?}", batch.unwrap().num_rows());
+    }
 
     let result = plan.collect().await.unwrap();
     let pretty_result = arrow::util::pretty::pretty_format_batches(&result)
