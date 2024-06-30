@@ -27,3 +27,4 @@ datafusion = { version = "39.0" }
 datafusion-expr = { version = "39.0" }
 async-trait = { version = "0.1.80" }
 tokio = "1.38.0"
+futures-core = "0.3"

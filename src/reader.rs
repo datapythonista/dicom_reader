@@ -1,9 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use futures_core::Stream;
 use dicom::pixeldata::PixelDecoder;
 use dicom::dictionary_std::tags;
 use arrow::datatypes::{Schema, Field, DataType, Int16Type};
 use arrow::array::{RecordBatch, ArrayRef, UInt16Builder, StringBuilder, StringDictionaryBuilder, LargeBinaryBuilder};
+use datafusion::error::DataFusionError;
 
 /// A standard representation of a Dicom image
 ///
@@ -70,7 +74,9 @@ impl std::fmt::Debug for DicomImage {
 
 pub struct DicomReader {
     dicom_directories: Vec<String>,
-    index: usize,
+    projection: Option<Vec<String>>,
+    limit: Option<usize>,
+    batch_size: usize,
 }
 impl DicomReader {
     pub fn new(path: impl AsRef<std::path::Path>) -> Self {
@@ -83,11 +89,48 @@ impl DicomReader {
         }
         DicomReader {
             dicom_directories: dicom_directories.into_iter().collect::<Vec<_>>(),
+            projection: None,
+            limit: None,
+            batch_size: 10,
+        }
+    }
+
+    pub fn with_projection(mut self, projection: Option<Vec<&str>>) -> Self {
+        self.projection = projection.map(|vec| {
+            vec.into_iter()
+               .map(|x| x.to_string())
+               .collect()
+        });
+        self
+    }
+
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    pub fn iter(&self) -> DicomIter {
+        DicomIter {
+            dicom_reader: self,
             index: 0,
         }
     }
 
-    pub fn to_record_batch(self) -> RecordBatch {
+    pub fn to_record_batch(&self) -> RecordBatch {
+
+        if self.limit.is_some() | self.projection.is_some() {
+            self.to_record_batch_with_options()
+        } else {
+            self.to_record_batch_no_options()
+        }
+    }
+
+    fn to_record_batch_no_options(&self) -> RecordBatch {
         let mut path_builder = StringBuilder::new();
         let mut modality_builder = StringDictionaryBuilder::<Int16Type>::new();
         let mut columns_builder = UInt16Builder::new();
@@ -95,7 +138,7 @@ impl DicomReader {
         let mut frames_builder = UInt16Builder::new();
         let mut voxels_builder = LargeBinaryBuilder::new();
 
-        for dicom_image in self.take(3) {
+        for dicom_image in self.iter() {
             let voxels = dicom_image.voxels();
             path_builder.append_value(dicom_image.path);
             modality_builder.append_value(dicom_image.modality);
@@ -133,49 +176,33 @@ impl DicomReader {
         ).unwrap()
     }
 
-    pub fn to_record_batch_with_options(self,
-                                        n_rows: Option<usize>,
-                                        columns: Option<Vec<&str>>) -> RecordBatch {
+    pub fn to_record_batch_with_options(&self) -> RecordBatch {
+        let (mut fetch_path,
+             mut fetch_modality,
+             mut fetch_columns,
+             mut fetch_rows,
+             mut fetch_frames,
+             mut fetch_voxels) = (true, true, true, true, true, true);
 
-        println!("DICOM Reader: Received number of rows to fetch: {:?}", n_rows);
-        println!("DICOM Reader: Received columns to fetch: {:?}", columns);
+        if let Some(ref columns) = self.projection {
+            let columns_set: HashSet<&str> = columns.into_iter()
+                                                    .map(|x| x.as_str())
+                                                    .collect();
 
-        let iterator: Box<dyn Iterator<Item=DicomImage>> = match n_rows {
-            Some(num_rows) => { Box::new(self.take(num_rows)) }
-            None => { Box::new(self) }
-        };
-
-
-        let (fetch_path,
-             fetch_modality,
-             fetch_columns,
-             fetch_rows,
-             fetch_frames,
-             fetch_voxels) = if let Some(cols_vec) = columns {
-            let known_columns: HashSet<&str> = vec![
-                "path",
-                "modality",
-                "columns",
-                "rows",
-                "frames",
-                "voxels",
-            ].into_iter().collect();
-            let cols_set: HashSet<&str> = cols_vec.into_iter().collect();
-            let diff: HashSet<&str> = cols_set.difference(&known_columns).cloned().collect();
-            if !diff.is_empty() {
-                panic!("Unknown columns: {:?}", diff);
+            let known_columns = vec!["path", "modality", "columns", "rows", "frames", "voxels"]
+                .into_iter()
+                .collect::<HashSet<_>>();
+            let unknown_columns = columns_set.difference(&known_columns).collect::<Vec<_>>();
+            if !unknown_columns.is_empty() {
+                panic!("Unknown columns: {:?}", unknown_columns);
             }
-            (
-                cols_set.contains("path"),
-                cols_set.contains("modality"),
-                cols_set.contains("columns"),
-                cols_set.contains("rows"),
-                cols_set.contains("frames"),
-                cols_set.contains("voxels"),
-            )
-        } else {
-            (true, true, true, true, true, true)
-        };
+            fetch_path = columns_set.contains("path");
+            fetch_modality = columns_set.contains("modality");
+            fetch_columns = columns_set.contains("columns");
+            fetch_rows = columns_set.contains("rows");
+            fetch_frames = columns_set.contains("frames");
+            fetch_voxels = columns_set.contains("voxels");
+        }
 
         // Can we avoid creating the builders?
         let mut path_builder = StringBuilder::new();
@@ -185,7 +212,7 @@ impl DicomReader {
         let mut frames_builder = UInt16Builder::new();
         let mut voxels_builder = LargeBinaryBuilder::new();
 
-        for dicom_image in iterator {
+        for dicom_image in self.iter().take(5) {
             if fetch_path {
                 path_builder.append_value(dicom_image.path.clone());
             }
@@ -244,23 +271,95 @@ impl DicomReader {
 
         RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap()
     }
-
 }
-impl Iterator for DicomReader {
+
+impl<'a> IntoIterator for DicomReader {
+    type Item = DicomImage;
+    type IntoIter = DicomReaderIterator;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DicomReaderIterator {
+            dicom_reader: self,
+            index: 0,
+        }
+    }
+}
+
+pub struct DicomIter<'a> {
+    dicom_reader: &'a DicomReader,
+    index: usize,
+}
+
+impl Iterator for DicomIter<'_> {
     type Item = DicomImage;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.dicom_directories.len() {
+        if self.index >= self.dicom_reader.dicom_directories.len() {
             None
         } else {
 
-            let files = std::fs::read_dir(&self.dicom_directories[self.index]).unwrap();
+            let files = std::fs::read_dir(&self.dicom_reader.dicom_directories[self.index]).unwrap();
             let dicom_files = files.filter(|x| x.as_ref().unwrap().path().extension().unwrap() == "dcm")
                                    .map(|x| x.unwrap().path())
                                    .collect::<Vec<_>>();
 
             self.index += 1;
             Some(DicomImage::new(dicom_files.iter().map(|x| x.as_path()).collect()))
+        }
+    }
+}
+
+pub struct DicomReaderIterator {
+    dicom_reader: DicomReader,
+    index: usize,
+}
+
+impl Iterator for DicomReaderIterator {
+    type Item = DicomImage;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.dicom_reader.dicom_directories.len() {
+            None
+        } else {
+
+            let files = std::fs::read_dir(&self.dicom_reader.dicom_directories[self.index]).unwrap();
+            let dicom_files = files.filter(|x| x.as_ref().unwrap().path().extension().unwrap() == "dcm")
+                                   .map(|x| x.unwrap().path())
+                                   .collect::<Vec<_>>();
+
+            self.index += 1;
+            Some(DicomImage::new(dicom_files.iter().map(|x| x.as_path()).collect()))
+        }
+    }
+}
+
+pub struct DicomReaderStreamer {
+    dicom_reader_iterator: DicomReaderIterator,
+    sent_data: bool,
+}
+
+impl DicomReaderStreamer {
+    pub fn new(reader: DicomReader) -> Self {
+        DicomReaderStreamer {
+            dicom_reader_iterator: reader.into_iter(),
+            sent_data: false,
+        }
+    }
+}
+
+impl Stream for DicomReaderStreamer {
+    type Item = Result<RecordBatch, DataFusionError>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
+        if self.sent_data {
+            Poll::Ready(None)
+        } else {
+            let dicom_reader_streamer = Pin::get_mut(self);
+            (*dicom_reader_streamer).sent_data = true;
+            let record_batch = dicom_reader_streamer.dicom_reader_iterator
+                                                    .dicom_reader
+                                                    .to_record_batch();
+            Poll::Ready(Some(Ok(record_batch)))
         }
     }
 }

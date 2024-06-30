@@ -9,7 +9,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties, Partitioning, ExecutionMode,
                                 RecordBatchStream, DisplayAs, DisplayFormatType, project_schema};
-use datafusion::physical_plan::memory::MemoryStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion_expr::Expr;
 use datafusion::error::DataFusionError;
@@ -69,15 +69,17 @@ impl ExecutionPlan for DicomExecutionPlan {
                           .map(|f| f.name().to_string())
                           .collect::<Vec<_>>();
 
-        let columns_str = columns.iter().map(|c| c.as_str()).collect();
-        let record_batch = reader::DicomReader::new(&self.path)
-            .to_record_batch_with_options(self.limit, Some(columns_str));
+        let columns_str = columns.iter()
+                                 .map(|c| c.as_str())
+                                 .collect::<Vec<_>>();
+        let dicom_reader = reader::DicomReader::new(&self.path)
+            .with_projection(Some(columns_str))
+            .with_limit(self.limit);
 
-        let record_batch_streamer = MemoryStream::try_new(
-            vec![record_batch],
+        let record_batch_streamer = RecordBatchStreamAdapter::new(
             self.properties.equivalence_properties().schema().clone(),
-            None,
-        )?;
+            reader::DicomReaderStreamer::new(dicom_reader),
+        );
         Ok(Box::pin(record_batch_streamer))
     }
 

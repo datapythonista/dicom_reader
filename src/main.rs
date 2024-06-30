@@ -1,5 +1,5 @@
 use polars::prelude::{LazyFrame, col, lit};
-use polars::prelude::{ParquetWriteOptions, ParquetCompression};
+//use polars::prelude::{ParquetWriteOptions, ParquetCompression};
 use polars::datatypes::DataType;
 use datafusion::execution::context::SessionContext;
 use crate::polars_reader::DicomScanner;
@@ -28,10 +28,10 @@ fn exec_polars_pipeline(path: impl AsRef<std::path::Path>) {
     let plan = q.explain(false).unwrap();
     println!("{}", plan);
 
+    /*
     let df = q.fetch(2).unwrap();
     println!("polars df: {:?}", df);
 
-    /*
     let options = ParquetWriteOptions {
         compression: ParquetCompression::Uncompressed,
         statistics: false,
@@ -72,6 +72,6 @@ async fn exec_datafusion_pipeline(path: impl AsRef<std::path::Path>) {
 #[tokio::main]
 async fn main() {
     let data_dir = "/home/mgarcia/src/dicom_reader/data/manifest-1677266205028";
-    // exec_polars_pipeline(&data_dir);
+    exec_polars_pipeline(&data_dir);
     exec_datafusion_pipeline(&data_dir).await;
 }

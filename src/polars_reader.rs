@@ -38,8 +38,9 @@ impl AnonymousScan for DicomScan {
         }
 
         let record_batch = reader::DicomReader::new(&self.path)
-            .to_record_batch_with_options(scan_opts.n_rows,
-                                          projection);
+            .with_limit(scan_opts.n_rows)
+            .with_projection(projection)
+            .to_record_batch();
         recordbatch_to_polars_dataframe(record_batch)
     }
     fn schema(&self, _infer_schema_length: Option<usize>) -> PolarsResult<Arc<Schema>> {
