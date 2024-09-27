@@ -3,7 +3,10 @@ use polars::prelude::{LazyFrame, col, lit};
 //use polars::prelude::{ParquetWriteOptions, ParquetCompression};
 use polars::datatypes::DataType;
 use datafusion::prelude::SessionConfig;
+use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::config::{FormatOptions, TableParquetOptions, ParquetOptions};
 use crate::polars_reader::DicomScanner;
 mod reader;
 mod polars_reader;
@@ -57,26 +60,54 @@ async fn exec_datafusion_pipeline(path: impl AsRef<std::path::Path>) {
                columns,
                rows,
                frames,
-               rows * columns * frames AS total_voxels
+               rows * columns * frames AS num_voxels,
+               voxels
         FROM dicom_table
         WHERE modality = 'CT'
-        ORDER BY total_voxels DESC
-        LIMIT 30;
+        -- ORDER BY total_voxels DESC
+        LIMIT 12;
         "
     ).await.unwrap();
 
-    let mut stream = plan.clone().execute_stream().await.unwrap();
+    let mut parquet_options = ParquetOptions::default();
+    parquet_options.write_batch_size = 5;
+    let table_parquet_options = TableParquetOptions {
+        global: parquet_options,
+        column_specific_options: Default::default(),
+        key_value_metadata: Default::default(),
+    };
+
+    let full_plan = LogicalPlanBuilder::copy_to(
+        plan.logical_plan().clone(),
+        "/home/mgarcia/dicom_output.parquet".to_string(),
+        FormatOptions::PARQUET(table_parquet_options),
+        Default::default(),
+        vec![],
+    ).unwrap().build().unwrap();
+
+    let df = DataFrame::new(ctx.state().clone(), full_plan);
+
+    let mut stream = df.clone().execute_stream().await.unwrap();
     println!("Stream schema: {}", stream.schema());
 
     while let Some(batch) = stream.next().await {
-        println!("num_rows: {:?}", batch.unwrap().num_rows());
+        println!("{:?}", &batch);
+        // println!("num_rows: {:?}", batch.unwrap().num_rows());
     }
+
+    /*
+    df.collect().await.unwrap();
+
+    plan.write_parquet("dicom_output.parquet",
+                       DataFrameWriteOptions::new(),
+                       None).await.unwrap();
 
     let result = plan.collect().await.unwrap();
     let pretty_result = arrow::util::pretty::pretty_format_batches(&result)
         .unwrap()
         .to_string();
     println!("{pretty_result}");
+    */
 }
 
 #[tokio::main]
